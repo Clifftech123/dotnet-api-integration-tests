@@ -1,6 +1,6 @@
 
 
-# 🧪 TestWebApi – Sample .NET API Testing Setup
+#  TestWebApi – Sample .NET API Testing Setup
 
 This is a sample repository for setting up API testing in .NET.
 
@@ -8,7 +8,7 @@ It demonstrates how to build a robust and maintainable testing environment for A
 
 ---
 
-## 🚀 What's Included
+##  What's Included
 
 - **Mocking Services**  
   Easily isolate dependencies using mocking frameworks like Moq to test service behavior without relying on real implementations.
@@ -21,7 +21,7 @@ It demonstrates how to build a robust and maintainable testing environment for A
 
 ---
 
-## 🧱 Project Structure
+##  Project Structure
 
 ```
 TestWebApi.sln
@@ -51,11 +51,11 @@ TestWebApi.sln
    dotnet test
    ```
 
-> 💡 Make sure Docker is running for Testcontainers to work properly.
+>  Make sure Docker is running for Testcontainers to work properly.
 
 ---
 
-## 📚 Technologies Used
+##  Technologies Used
 
 - [.NET 8](https://learn.microsoft.com/en-us/dotnet/core/dotnet-eight)
 - [xUnit](https://xunit.net/)
