@@ -1,6 +1,162 @@
-@TestWebApi_HostAddress = http://localhost:5287
-
-GET {{TestWebApi_HostAddress}}/weatherforecast/
-Accept: application/json
+@host = http://localhost:5287
+@json = application/json
+@productId = 11111111-1111-1111-1111-111111111111
+@categoryId = 22222222-2222-2222-2222-222222222222
 
 ###
+# Weather (baseline template endpoint)
+GET {{host}}/weatherforecast
+Accept: {{json}}
+
+############################################
+# CATEGORY ENDPOINTS
+############################################
+
+###
+# Create Category
+POST {{host}}/api/categories
+Content-Type: {{json}}
+Accept: {{json}}
+
+{
+  "name": "Electronics",
+  "description": "Electronic devices and gadgets"
+}
+
+###
+# Get All Categories
+GET {{host}}/api/categories
+Accept: {{json}}
+
+###
+# Get Category By Id
+GET {{host}}/api/categories/{{categoryId}}
+Accept: {{json}}
+
+###
+# Get Category Details (with products)
+GET {{host}}/api/categories/{{categoryId}}/details
+Accept: {{json}}
+
+###
+# Search Categories
+GET {{host}}/api/categories/search?term=Elect
+Accept: {{json}}
+
+###
+# Categories Paged
+GET {{host}}/api/categories/paged?page=1&pageSize=10
+Accept: {{json}}
+
+###
+# Categories With Any Products
+GET {{host}}/api/categories/with-products
+Accept: {{json}}
+
+###
+# Categories With Product Count
+GET {{host}}/api/categories/with-product-count
+Accept: {{json}}
+
+###
+# Top Categories By Product Count
+GET {{host}}/api/categories/top?count=5
+Accept: {{json}}
+
+###
+# Can Delete Category (true/false)
+GET {{host}}/api/categories/{{categoryId}}/can-delete
+Accept: {{json}}
+
+###
+# Update Category
+PUT {{host}}/api/categories/{{categoryId}}
+Content-Type: {{json}}
+Accept: {{json}}
+
+{
+  "id": "{{categoryId}}",
+  "name": "Electronics Updated",
+  "description": "Updated description"
+}
+
+###
+# Delete Category
+DELETE {{host}}/api/categories/{{categoryId}}
+Accept: {{json}}
+
+############################################
+# PRODUCT ENDPOINTS
+############################################
+
+###
+# Create Product
+POST {{host}}/api/products
+Content-Type: {{json}}
+Accept: {{json}}
+
+{
+  "name": "iPhone 16",
+  "price": 1499.99,
+  "description": "Latest flagship phone",
+  "categoryId": "{{categoryId}}"
+}
+
+###
+# Get All Products
+GET {{host}}/api/products
+Accept: {{json}}
+
+###
+# Get Product By Id
+GET {{host}}/api/products/{{productId}}
+Accept: {{json}}
+
+###
+# Get Product Details
+GET {{host}}/api/products/{{productId}}/details
+Accept: {{json}}
+
+###
+# Search Products
+GET {{host}}/api/products/search?term=phone
+Accept: {{json}}
+
+###
+# Products By Category
+GET {{host}}/api/products/category/{{categoryId}}
+Accept: {{json}}
+
+###
+# Product Count By Category
+GET {{host}}/api/products/category/{{categoryId}}/count
+Accept: {{json}}
+
+###
+# Products By Price Range
+GET {{host}}/api/products/price-range?minPrice=100&maxPrice=2000
+Accept: {{json}}
+
+###
+# Products Paged
+GET {{host}}/api/products/paged?page=1&pageSize=10
+Accept: {{json}}
+
+###
+# Update Product
+PUT {{host}}/api/products/{{productId}}
+Content-Type: {{json}}
+Accept: {{json}}
+
+{
+  "id": "{{productId}}",
+  "name": "iPhone 16 Pro",
+  "price": 1699.99,
+  "description": "Updated flagship description",
+  "categoryId": "{{categoryId}}"
+}
+
+###
+# Delete Product
+DELETE {{host}}/api/products/{{productId}}
+Accept: {{json}}

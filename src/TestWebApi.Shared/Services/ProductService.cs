@@ -1,9 +1,10 @@
-
-
 using TestWebApi.Core.Entities;
 using TestWebApi.Shared.Constructs;
 using TestWebApi.Shared.Extensions;
+using TestWebApi.Shared.Middleware;
 using TestWebApi.Shared.Repositories;
+using TestWebApi.Shared.TestWebMiddleWare;
+using ValidationError = TestWebApi.Shared.Constructs.ValidationError;
 
 namespace TestWebApi.Shared.Services
 {
@@ -17,18 +18,21 @@ namespace TestWebApi.Shared.Services
             _productRepository = productRepository ?? throw new ArgumentNullException(nameof(productRepository));
             _categoryRepository = categoryRepository ?? throw new ArgumentNullException(nameof(categoryRepository));
         }
-        #region Basic CRUD Operations
 
         public async Task<ProductResponse?> GetProductByIdAsync(Guid id)
         {
             var product = await _productRepository.GetByIdAsync(id, p => p.Category);
-            return product?.ToProductResponse();
+            if (product is null)
+                throw new ProductNotFoundException(id);
+            return product.ToProductResponse();
         }
 
         public async Task<ProductDetailsResponse?> GetProductDetailsAsync(Guid id)
         {
             var product = await _productRepository.GetByIdAsync(id, p => p.Category);
-            return product?.ToProductDetailsResponse();
+            if (product is null)
+                throw new ProductNotFoundException(id);
+            return product.ToProductDetailsResponse();
         }
 
         public async Task<IEnumerable<ProductResponse>> GetAllProductsAsync()
@@ -39,60 +43,43 @@ namespace TestWebApi.Shared.Services
 
         public async Task<ProductResponse> CreateProductAsync(CreateProductRequest request)
         {
+            var validation = await ValidateProductAsync(request);
+            if (!validation.IsValid)
+                throw new ValidationException(validation.Errors.Select(e => new TestWebMiddleWare.ValidationError { Field = e.Field, Message = e.Message }));
 
-            // Validate  product using the validation method
-            var validationResult = await ValidateProductAsync(request);
-            if (!validationResult.IsValid)
-            {
-                var errors = string.Join("; ", validationResult.Errors.Select(e => $"{e.Field}: {e.Message}"));
-                throw new ArgumentException($"Product validation failed: {errors}");
-            }
+            var entity = request.ToProduct();
+            var created = await _productRepository.CreateAsync(entity);
 
-            var product = request.ToProduct();
-            var createdProduct = await _productRepository.CreateAsync(product);
-
-            // Get the product with category for response
-            var productWithCategory = await _productRepository.GetByIdAsync(createdProduct.Id, p => p.Category);
-            return productWithCategory!.ToProductResponse();
+            var withCategory = await _productRepository.GetByIdAsync(created.Id, p => p.Category);
+            return withCategory!.ToProductResponse();
         }
 
         public async Task<ProductResponse?> UpdateProductAsync(UpdateProductRequest request)
         {
+            var validation = await ValidateProductUpdateAsync(request);
+            if (!validation.IsValid)
+                throw new ValidationException(validation.Errors.Select(e => new TestWebMiddleWare.ValidationError { Field = e.Field, Message = e.Message }));
 
-            // Validate product using the validation method
-            var validationResult = await ValidateProductUpdateAsync(request);
-            if (!validationResult.IsValid)
-                {
-                var errors = string.Join("; ", validationResult.Errors.Select(e => $"{e.Field}: {e.Message}"));
-                throw new ArgumentException($"Product validation failed: {errors}");
-            }
-            var existingProduct = await _productRepository.GetByIdAsync(request.Id);
-            if (existingProduct == null)
-                return null;
+            var existing = await _productRepository.GetByIdAsync(request.Id);
+            if (existing is null)
+                throw new ProductNotFoundException(request.Id);
 
-            existingProduct.UpdateFromRequest(request);
-            await _productRepository.UpdateAsync(existingProduct);
+            existing.UpdateFromRequest(request);
+            await _productRepository.UpdateAsync(existing);
 
-            // Get updated product with category
-            var updatedProduct = await _productRepository.GetByIdAsync(request.Id, p => p.Category);
-            return updatedProduct!.ToProductResponse();
+            var updated = await _productRepository.GetByIdAsync(request.Id, p => p.Category);
+            return updated!.ToProductResponse();
         }
 
         public async Task<bool> DeleteProductAsync(Guid id)
         {
+            var exists = await _productRepository.ExistsAsync(id);
+            if (!exists)
+                throw new ProductNotFoundException(id);
             return await _productRepository.DeleteAsync(id);
         }
 
-        #endregion
-
-
-
-        #region Advanced Operations
-
-        public async Task<bool> ProductExistsAsync(Guid id)
-        {
-            return await _productRepository.ExistsAsync(id);
-        }
+        public async Task<bool> ProductExistsAsync(Guid id) => await _productRepository.ExistsAsync(id);
 
         public async Task<IEnumerable<ProductResponse>> GetProductsByCategoryAsync(Guid categoryId)
         {
@@ -119,85 +106,46 @@ namespace TestWebApi.Shared.Services
             return products.ToProductResponseList();
         }
 
-        #endregion
-
-
-        #region Pagination & Filtering
-
         public async Task<PagedResponse<ProductResponse>> GetProductsPagedAsync(int page, int pageSize)
         {
             var products = await _productRepository.GetPagedAsync(page, pageSize, p => p.Category);
-            var totalCount = await _productRepository.CountAsync();
+            var total = await _productRepository.CountAsync();
+            var totalPages = (int)Math.Ceiling(total / (double)pageSize);
+            if (page > totalPages && totalPages != 0)
+                throw new PaginationOutOfRangeException(page, totalPages);
 
-            return PagedResponse<ProductResponse>.Create(
-                products.ToProductResponseList(),
-                page,
-                pageSize,
-                totalCount);
+            return PagedResponse<ProductResponse>.Create(products.ToProductResponseList(), page, pageSize, total);
         }
 
-       
-        public async Task<int> GetProductCountAsync()
-        {
-            return await _productRepository.CountAsync();
-        }
+        public async Task<int> GetProductCountAsync() => await _productRepository.CountAsync();
+        public async Task<int> GetProductCountByCategoryAsync(Guid categoryId) =>
+            await _productRepository.CountAsync(p => p.CategoryId == categoryId);
 
-        public async Task<int> GetProductCountByCategoryAsync(Guid categoryId)
-        {
-            return await _productRepository.CountAsync(p => p.CategoryId == categoryId);
-        }
-
-        #endregion
-
-    
-    
-        #region Validation
-
+        // Validation methods unchanged (still return ValidationResult for reuse)
         public async Task<ValidationResult> ValidateProductAsync(CreateProductRequest request)
         {
             var errors = new List<ValidationError>();
-
             if (string.IsNullOrWhiteSpace(request.Name))
                 errors.Add(new ValidationError(nameof(request.Name), "Product name is required"));
-
             if (request.Price <= 0)
                 errors.Add(new ValidationError(nameof(request.Price), "Product price must be greater than 0"));
-
             if (!await _categoryRepository.ExistsAsync(request.CategoryId))
                 errors.Add(new ValidationError(nameof(request.CategoryId), "Category does not exist"));
-
             return new ValidationResult(errors.Count == 0, errors);
         }
 
         public async Task<ValidationResult> ValidateProductUpdateAsync(UpdateProductRequest request)
         {
             var errors = new List<ValidationError>();
-
             if (!await _productRepository.ExistsAsync(request.Id))
                 errors.Add(new ValidationError(nameof(request.Id), "Product does not exist"));
-
             if (string.IsNullOrWhiteSpace(request.Name))
                 errors.Add(new ValidationError(nameof(request.Name), "Product name is required"));
-
             if (request.Price <= 0)
                 errors.Add(new ValidationError(nameof(request.Price), "Product price must be greater than 0"));
-
             if (!await _categoryRepository.ExistsAsync(request.CategoryId))
                 errors.Add(new ValidationError(nameof(request.CategoryId), "Category does not exist"));
-
             return new ValidationResult(errors.Count == 0, errors);
         }
-
-        #endregion
-
-        #region Private Helper Methods
-
-   
-
-      
-
-    
-
-        #endregion
     }
 }

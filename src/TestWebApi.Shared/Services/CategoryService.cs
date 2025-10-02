@@ -2,6 +2,8 @@ using TestWebApi.Core.Entities;
 using TestWebApi.Shared.Constructs;
 using TestWebApi.Shared.Extensions;
 using TestWebApi.Shared.Repositories;
+using TestWebApi.Shared.TestWebMiddleWare;
+using ValidationError = TestWebApi.Shared.Constructs.ValidationError;
 
 namespace TestWebApi.Shared.Services
 {
@@ -16,19 +18,19 @@ namespace TestWebApi.Shared.Services
             _productRepository = productRepository ?? throw new ArgumentNullException(nameof(productRepository));
         }
 
-        #region Basic CRUD Operations
-
         public async Task<CategoryResponse?> GetCategoryByIdAsync(Guid id)
         {
             var category = await _categoryRepository.GetByIdAsync(id);
-            return category?.ToCategoryResponse();
+            if (category is null)
+                throw new CategoryNotFoundException(id);
+            return category.ToCategoryResponse();
         }
 
         public async Task<CategoryDetailsResponse?> GetCategoryDetailsAsync(Guid id)
         {
             var category = await _categoryRepository.GetByIdAsync(id);
-            if (category == null)
-                return null;
+            if (category is null)
+                throw new CategoryNotFoundException(id);
 
             var products = await _productRepository.FindAsync(p => p.CategoryId == id);
             return category.ToCategoryDetailsResponse(products);
@@ -42,60 +44,66 @@ namespace TestWebApi.Shared.Services
 
         public async Task<CategoryResponse> CreateCategoryAsync(CreateCategoryRequest request)
         {
-            // Validate category using the validation method
-            var validationResult = await ValidateCategoryAsync(request);
-            if (!validationResult.IsValid)
+            var validation = await ValidateCategoryAsync(request);
+            if (!validation.IsValid)
             {
-                var errors = string.Join("; ", validationResult.Errors.Select(e => $"{e.Field}: {e.Message}"));
-                throw new ArgumentException($"Category validation failed: {errors}");
+                // If duplicate name is detected in validation, raise specific exception
+                var duplicate = validation.Errors.FirstOrDefault(e => e.Field == nameof(request.Name) && e.Message.Contains("already exists", StringComparison.OrdinalIgnoreCase));
+                if (duplicate.Field is not null)
+                    throw new DuplicateCategoryNameException(request.Name!);
+
+                throw new ValidationException(validation.Errors.Select(e => new TestWebMiddleWare.ValidationError { Field = e.Field, Message = e.Message }));
             }
 
-            var category = request.ToCategory();
-            var createdCategory = await _categoryRepository.CreateAsync(category);
-            return createdCategory.ToCategoryResponse();
+            var entity = request.ToCategory();
+            var created = await _categoryRepository.CreateAsync(entity);
+            return created.ToCategoryResponse();
         }
 
         public async Task<CategoryResponse?> UpdateCategoryAsync(UpdateCategoryRequest request)
         {
-            var validationResult = await ValidateCategoryUpdateAsync(request);
-            if (!validationResult.IsValid)
+            var validation = await ValidateCategoryUpdateAsync(request);
+            if (!validation.IsValid)
             {
-                var errors = string.Join("; ", validationResult.Errors.Select(e => $"{e.Field}: {e.Message}"));
-                throw new ArgumentException($"Category validation failed: {errors}");
+                var existsError = validation.Errors.FirstOrDefault(e => e.Field == nameof(request.Id) && e.Message.Contains("does not exist", StringComparison.OrdinalIgnoreCase));
+                if (existsError?.Field is not null)
+                    throw new CategoryNotFoundException(request.Id);
+
+                var duplicate = validation.Errors.FirstOrDefault(e => e.Field == nameof(request.Name) && e.Message.Contains("already exists", StringComparison.OrdinalIgnoreCase));
+                if (duplicate?.Field is not null)
+                    throw new DuplicateCategoryNameException(request.Name!);
+
+                throw new ValidationException(validation.Errors.Select(e => new TestWebMiddleWare.ValidationError { Field = e.Field, Message = e.Message }));
             }
 
-            var existingCategory = await _categoryRepository.GetByIdAsync(request.Id);
-            if (existingCategory == null)
-                return null;
+            var existing = await _categoryRepository.GetByIdAsync(request.Id);
+            if (existing is null)
+                throw new CategoryNotFoundException(request.Id);
 
-            existingCategory.UpdateFromRequest(request);
-            await _categoryRepository.UpdateAsync(existingCategory);
-            return existingCategory.ToCategoryResponse();
+            existing.UpdateFromRequest(request);
+            await _categoryRepository.UpdateAsync(existing);
+            return existing.ToCategoryResponse();
         }
 
         public async Task<bool> DeleteCategoryAsync(Guid id)
         {
-            // Check if category can be deleted (no associated products)
-            if (!await CanDeleteCategoryAsync(id))
-                return false;
+            var category = await _categoryRepository.GetByIdAsync(id);
+            if (category is null)
+                throw new CategoryNotFoundException(id);
+
+            var productCount = await _productRepository.CountAsync(p => p.CategoryId == id);
+            if (productCount > 0)
+                throw new CategoryDeleteNotAllowedException(id, productCount);
 
             return await _categoryRepository.DeleteAsync(id);
         }
 
-        #endregion
-
-        #region Advanced Operations
-
-        public async Task<bool> CategoryExistsAsync(Guid id)
-        {
-            return await _categoryRepository.ExistsAsync(id);
-        }
+        public async Task<bool> CategoryExistsAsync(Guid id) => await _categoryRepository.ExistsAsync(id);
 
         public async Task<CategoryResponse?> GetCategoryByNameAsync(string name)
         {
             if (string.IsNullOrWhiteSpace(name))
                 return null;
-
             var category = await _categoryRepository.GetFirstOrDefaultAsync(c => c.Name == name);
             return category?.ToCategoryResponse();
         }
@@ -113,138 +121,88 @@ namespace TestWebApi.Shared.Services
         public async Task<IEnumerable<CategoryResponse>> GetCategoriesWithProductsAsync()
         {
             var categories = await _categoryRepository.GetAllAsync();
-            var categoriesWithProducts = new List<CategoryResponse>();
-
-            foreach (var category in categories)
+            var result = new List<CategoryResponse>();
+            foreach (var c in categories)
             {
-                var hasProducts = await _productRepository.CountAsync(p => p.CategoryId == category.Id) > 0;
-                if (hasProducts)
-                {
-                    categoriesWithProducts.Add(category.ToCategoryResponse());
-                }
+                var hasProducts = await _productRepository.CountAsync(p => p.CategoryId == c.Id) > 0;
+                if (hasProducts) result.Add(c.ToCategoryResponse());
             }
-
-            return categoriesWithProducts;
+            return result;
         }
 
         public async Task<bool> CanDeleteCategoryAsync(Guid id)
         {
-            // Check if products are associated with this category then we cannot delete it
             var productCount = await _productRepository.CountAsync(p => p.CategoryId == id);
             return productCount == 0;
         }
 
-        #endregion
-
-        #region Pagination & Filtering
-
         public async Task<PagedResponse<CategoryResponse>> GetCategoriesPagedAsync(int page, int pageSize)
         {
             var categories = await _categoryRepository.GetPagedAsync(page, pageSize);
-            var totalCount = await _categoryRepository.CountAsync();
+            var total = await _categoryRepository.CountAsync();
+            var totalPages = (int)Math.Ceiling(total / (double)pageSize);
+            if (page > totalPages && totalPages != 0)
+                throw new PaginationOutOfRangeException(page, totalPages);
 
-            return PagedResponse<CategoryResponse>.Create(
-                categories.ToCategoryResponseList(),
-                page,
-                pageSize,
-                totalCount);
+            return PagedResponse<CategoryResponse>.Create(categories.ToCategoryResponseList(), page, pageSize, total);
         }
 
-       
-
-        public async Task<int> GetCategoryCountAsync()
-        {
-            return await _categoryRepository.CountAsync();
-        }
-
-        #endregion
-
-        #region Business Logic Operations
+        public async Task<int> GetCategoryCountAsync() => await _categoryRepository.CountAsync();
 
         public async Task<IEnumerable<CategorySummaryResponse>> GetCategoriesWithProductCountAsync()
         {
             var categories = await _categoryRepository.GetAllAsync();
-            var categorySummaries = new List<CategorySummaryResponse>();
-
-            foreach (var category in categories)
+            var list = new List<CategorySummaryResponse>();
+            foreach (var c in categories)
             {
-                var productCount = await _productRepository.CountAsync(p => p.CategoryId == category.Id);
-                categorySummaries.Add(category.ToCategorySummaryResponse(productCount));
+                var count = await _productRepository.CountAsync(p => p.CategoryId == c.Id);
+                list.Add(c.ToCategorySummaryResponse(count));
             }
-
-            return categorySummaries;
+            return list;
         }
 
         public async Task<IEnumerable<CategoryResponse>> GetTopCategoriesByProductCountAsync(int count)
         {
-            var categoriesWithCounts = await GetCategoriesWithProductCountAsync();
-            var topCategories = categoriesWithCounts
-                .OrderByDescending(c => c.ProductCount)
+            var summaries = await GetCategoriesWithProductCountAsync();
+            var top = summaries
+                .OrderByDescending(s => s.ProductCount)
                 .Take(count)
-                .Select(async c => await GetCategoryByIdAsync(c.Id))
-                .Where(c => c.Result != null)
-                .Select(c => c.Result!);
-
-            return topCategories;
+                .Select(s => _categoryRepository.GetByIdAsync(s.Id).Result) // simple sync wait (could refactor)
+                .Where(c => c != null)
+                .Select(c => c!.ToCategoryResponse());
+            return top;
         }
-
-        #endregion
-
-    
-
-        #region Validation
 
         public async Task<ValidationResult> ValidateCategoryAsync(CreateCategoryRequest request)
         {
             var errors = new List<ValidationError>();
-
             if (string.IsNullOrWhiteSpace(request.Name))
                 errors.Add(new ValidationError(nameof(request.Name), "Category name is required"));
-
-            // Check for duplicate name
-            var existingCategory = await _categoryRepository.GetFirstOrDefaultAsync(c => c.Name == request.Name);
-            if (existingCategory != null)
+            var existing = await _categoryRepository.GetFirstOrDefaultAsync(c => c.Name == request.Name);
+            if (existing != null)
                 errors.Add(new ValidationError(nameof(request.Name), "Category name already exists"));
-
             if (request.Name?.Length > 100)
                 errors.Add(new ValidationError(nameof(request.Name), "Category name cannot exceed 100 characters"));
-
             if (request.Description?.Length > 500)
                 errors.Add(new ValidationError(nameof(request.Description), "Category description cannot exceed 500 characters"));
-
             return new ValidationResult(errors.Count == 0, errors);
         }
 
         public async Task<ValidationResult> ValidateCategoryUpdateAsync(UpdateCategoryRequest request)
         {
             var errors = new List<ValidationError>();
-
             if (!await _categoryRepository.ExistsAsync(request.Id))
                 errors.Add(new ValidationError(nameof(request.Id), "Category does not exist"));
-
             if (string.IsNullOrWhiteSpace(request.Name))
                 errors.Add(new ValidationError(nameof(request.Name), "Category name is required"));
-
-            // Check for duplicate name (excluding current category)
-            var existingCategory = await _categoryRepository.GetFirstOrDefaultAsync(c => c.Name == request.Name && c.Id != request.Id);
-            if (existingCategory != null)
+            var existing = await _categoryRepository.GetFirstOrDefaultAsync(c => c.Name == request.Name && c.Id != request.Id);
+            if (existing != null)
                 errors.Add(new ValidationError(nameof(request.Name), "Category name already exists"));
-
             if (request.Name?.Length > 100)
                 errors.Add(new ValidationError(nameof(request.Name), "Category name cannot exceed 100 characters"));
-
             if (request.Description?.Length > 500)
                 errors.Add(new ValidationError(nameof(request.Description), "Category description cannot exceed 500 characters"));
-
             return new ValidationResult(errors.Count == 0, errors);
         }
-
-        #endregion
-
-       
-
-      
-
-        
     }
 }

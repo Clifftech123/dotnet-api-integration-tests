@@ -23,9 +23,6 @@ namespace TestWebApi.Shared.Services
         Task<PagedResponse<ProductResponse>> GetProductsPagedAsync(int page, int pageSize);      
         Task<int> GetProductCountByCategoryAsync(Guid categoryId);
 
- 
-
-
         // Validation
         Task<ValidationResult> ValidateProductAsync(CreateProductRequest request);
         Task<ValidationResult> ValidateProductUpdateAsync(UpdateProductRequest request);
